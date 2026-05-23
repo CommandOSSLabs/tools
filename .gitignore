@@ -41,3 +41,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # npm lockfiles are not used in this Bun workspace
 package-lock.json
+
+# Superpowers plans
+docs/superpowers
