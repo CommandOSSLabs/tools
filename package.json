@@ -1,0 +1,28 @@
+{
+  "name": "tools",
+  "version": "0.0.1",
+  "description": "Collection of Docker images used inside CommandOSS",
+  "keywords": [
+    "docker",
+    "sui"
+  ],
+  "homepage": "https://github.com/CommandOSSLabs/tools#readme",
+  "bugs": {
+    "url": "https://github.com/CommandOSSLabs/tools/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CommandOSSLabs/tools.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Toanzzz",
+  "type": "module",
+  "scripts": {
+    "check": "biome check",
+    "check:fix": "biome check --fix"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@biomejs/biome": "^2.4.15"
+  }
+}
