@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - packages/**
-      - scripts/sync-dockerhub-readme.mjs
+      - scripts/sync-dockerhub-readme.ts
       - .github/workflows/ci.yaml
       - .github/workflows/publish.yaml
 
@@ -39,7 +39,7 @@ jobs:
             walrus-upload-relay:
               - 'packages/walrus-upload-relay/**'
             global:
-              - 'scripts/sync-dockerhub-readme.mjs'
+              - 'scripts/sync-dockerhub-readme.ts'
               - '.github/workflows/ci.yaml'
               - '.github/workflows/publish.yaml'
 
