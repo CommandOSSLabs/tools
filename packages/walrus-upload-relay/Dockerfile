@@ -1,13 +1,15 @@
 ARG TARGETPLATFORM
+ARG VERSION
 
-FROM --platform=linux/amd64 mysten/walrus-upload-relay:main-v1.47.0 AS base-amd64
-FROM --platform=linux/arm64 mysten/walrus-upload-relay:main-arm64-v1.47.0 AS base-arm64
+FROM --platform=linux/amd64 mysten/walrus-upload-relay:main-v${VERSION} AS base-amd64
+FROM --platform=linux/arm64 mysten/walrus-upload-relay:main-arm64-v${VERSION} AS base-arm64
 
 FROM base-${TARGETPLATFORM#linux/} AS final
+ARG VERSION
 
 LABEL org.opencontainers.image.title="CommandOSS Walrus Upload Relay" \
   org.opencontainers.image.description="Configurable Walrus upload relay image" \
-  org.opencontainers.image.version="1.47.0" \
+  org.opencontainers.image.version="${VERSION}" \
   org.opencontainers.image.source="https://github.com/CommandOSSLabs/tools" \
   org.opencontainers.image.url="https://github.com/CommandOSSLabs/tools" \
   org.opencontainers.image.vendor="CommandOSSLabs" \

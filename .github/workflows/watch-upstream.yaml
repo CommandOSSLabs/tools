@@ -1,0 +1,112 @@
+name: Watch Upstream Docker Images
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update Watched Versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Fetch upstream version tag
+        id: upstream-version
+        uses: nerd-coder/fetch-dockerhub-tags@v1
+        with:
+          repo: mysten/walrus-upload-relay
+          filter: ^main-v([0-9]+[.][0-9]+[.][0-9]+)$
+          max_pages: 3
+
+      - name: Require upstream arm64 tag
+        uses: nerd-coder/fetch-dockerhub-tags@v1
+        with:
+          repo: mysten/walrus-upload-relay
+          filter: ^main-arm64-v${{ fromJSON(steps.upstream-version.outputs['matched-groups'])[0] }}$
+          max_pages: 3
+
+      - name: Detect upstream updates
+        id: detect
+        env:
+          LATEST_VERSION: ${{ fromJSON(steps.upstream-version.outputs['matched-groups'])[0] }}
+          VERSION_FILE: packages/walrus-upload-relay/.current-version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+
+          if [[ -z "${current_version}" ]]; then
+            echo "No version found in ${VERSION_FILE}" >&2
+            exit 1
+          fi
+
+          if [[ "${current_version}" == "${LATEST_VERSION}" ]]; then
+            echo "updated=false" >> "${GITHUB_OUTPUT}"
+            echo "walrus-upload-relay is already at ${LATEST_VERSION}"
+            exit 0
+          fi
+
+          printf '%s\n' "${LATEST_VERSION}" > "${VERSION_FILE}"
+
+          echo "updated=true" >> "${GITHUB_OUTPUT}"
+          echo "summary=- walrus-upload-relay: ${current_version} -> ${LATEST_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Commit updates
+        if: steps.detect.outputs.updated == 'true'
+        env:
+          SUMMARY: ${{ steps.detect.outputs.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- packages/walrus-upload-relay/.current-version
+          git commit -m "chore: update watched upstream image versions" -m "${SUMMARY}"
+          git push origin HEAD:main
+
+      - name: Dispatch publish
+        if: steps.detect.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          payload="$(
+            jq -cn '{
+              ref: "main",
+              inputs: {
+                "deploy-nitro-cli": "false",
+                "deploy-auth-proxy": "false",
+                "deploy-walrus-upload-relay": "true"
+              }
+            }'
+          )"
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yaml/dispatches" \
+            -d "${payload}"
+
+      - name: Report no updates
+        if: steps.detect.outputs.updated != 'true'
+        run: echo "No watched upstream image updates found."

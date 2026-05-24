@@ -109,13 +109,29 @@ jobs:
                 readme_path="README.md"
               fi
 
-              # If present, use OCI image version label from Dockerfile as an additional image tag.
+              # If present, use .current-version as the source of truth for the image version.
+              # Fall back to ARG VERSION or a literal OCI version label for older packages.
               image_version=""
-              if [[ -f "${package_dir}/Dockerfile" ]]; then
+              version_path="${package_dir}/.current-version"
+              if [[ -f "${version_path}" ]]; then
+                image_version="$(tr -d '[:space:]' < "${version_path}")"
+
+                if [[ -z "${image_version}" ]]; then
+                  echo "${version_path} is empty" >&2
+                  exit 1
+                fi
+              elif [[ -f "${package_dir}/Dockerfile" ]]; then
                 image_version="$(
-                  sed -n 's/^[[:space:]]*org\.opencontainers\.image\.version="\([^"]*\)".*/\1/p' "${package_dir}/Dockerfile" \
+                  sed -n 's/^[[:space:]]*ARG[[:space:]][[:space:]]*VERSION=\([^[:space:]#]*\).*/\1/p' "${package_dir}/Dockerfile" \
                     | head -n1
                 )"
+
+                if [[ -z "${image_version}" ]]; then
+                  image_version="$(
+                    sed -n 's/^[[:space:]]*org\.opencontainers\.image\.version="\([^"$]*\)".*/\1/p' "${package_dir}/Dockerfile" \
+                      | head -n1
+                  )"
+                fi
               fi
 
               jq -cn \
@@ -184,6 +200,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ matrix.package.image_version }}
           cache-from: |
             type=gha,scope=${{ matrix.package.name }}
             type=registry,ref=${{matrix.package.dockerhub_repo}}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
