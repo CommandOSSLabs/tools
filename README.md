@@ -22,3 +22,7 @@ This project is licensed under the Apache License 2.0.
 [`cmdoss/auth-proxy`]: https://hub.docker.com/r/cmdoss/auth-proxy
 [`cmdoss/nitro-cli`]: https://hub.docker.com/r/cmdoss/nitro-cli
 [`cmdoss/walrus-upload-relay`]: https://hub.docker.com/r/cmdoss/walrus-upload-relay
+
+---
+
+<center>Built with ❤️ by the CommandOSS Team</center>
