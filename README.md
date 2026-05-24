@@ -10,7 +10,7 @@ Collection of Docker images and tools for CommandOSS projects.
 | [`cmdoss/nitro-cli`]           | `1.0.0`     | Containerized AWS Nitro Enclaves CLI.             |
 | [`cmdoss/walrus-upload-relay`] | `1.50.0` 👁️  | Walrus Upload Relay with extra features.          |
 
-> [!NOTE] Upstream Watch
+> [!NOTE]
 > Images marked with 👁️ are automatically tracked against their upstream source. A scheduled workflow checks for new upstream releases every 6 hours and opens a PR to bump the version when one is detected.
 
 
