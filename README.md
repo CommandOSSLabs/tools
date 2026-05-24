@@ -25,4 +25,6 @@ This project is licensed under the Apache License 2.0.
 
 ---
 
-<center>Built with ❤️ by the CommandOSS Team</center>
+<p align="center">
+  <strong>Built with ❤️ by the CommandOSS Team</strong>
+</p>
