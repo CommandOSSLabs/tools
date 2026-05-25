@@ -1,3 +1,4 @@
+# Default for local builds. Release builds pass VERSION from .current-version.
 ARG VERSION=2023
 
 FROM amazonlinux:${VERSION}

@@ -14,143 +14,205 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update:
-    name: Update Watched Versions
+  sync-upstream:
+    name: Sync Watched Upstream Versions
     runs-on: ubuntu-latest
+    env:
+      WATCH_MATRIX: |
+        [
+          {
+            "package_name": "nitro-cli",
+            "repo": "library/amazonlinux",
+            "filter": "^(2023[.][0-9]+[.][0-9]+[.][0-9]+)$",
+            "second_filter": "",
+            "version_file": "packages/nitro-cli/.current-version",
+            "publish_input": "deploy-nitro-cli"
+          },
+          {
+            "package_name": "walrus-upload-relay",
+            "repo": "mysten/walrus-upload-relay",
+            "filter": "^main-v([0-9]+[.][0-9]+[.][0-9]+)$",
+            "second_filter": "^main-arm64-v{{version}}$",
+            "version_file": "packages/walrus-upload-relay/.current-version",
+            "publish_input": "deploy-walrus-upload-relay"
+          }
+        ]
     steps:
       - name: Checkout main
         uses: actions/checkout@v6
         with:
           ref: main
 
-      - name: Fetch upstream version tag
-        id: walrus-version
-        uses: nerd-coder/fetch-dockerhub-tags@v1
-        with:
-          repo: mysten/walrus-upload-relay
-          filter: ^main-v([0-9]+[.][0-9]+[.][0-9]+)$
-          max_pages: 3
-
-      - name: Require upstream arm64 tag
-        uses: nerd-coder/fetch-dockerhub-tags@v1
-        with:
-          repo: mysten/walrus-upload-relay
-          filter: ^main-arm64-v${{ fromJSON(steps.walrus-version.outputs['matched-groups'])[0] }}$
-          max_pages: 3
-
-      - name: Fetch Amazon Linux 2023 version tag
-        id: amazonlinux-version
-        uses: nerd-coder/fetch-dockerhub-tags@v1
-        with:
-          repo: library/amazonlinux
-          filter: ^(2023[.][0-9]+[.][0-9]+[.][0-9]+)$
-          max_pages: 3
-
-      - name: Detect upstream updates
-        id: detect
-        env:
-          WALRUS_LATEST_VERSION: ${{ fromJSON(steps.walrus-version.outputs['matched-groups'])[0] }}
-          WALRUS_VERSION_FILE: packages/walrus-upload-relay/.current-version
-          AMAZONLINUX_LATEST_VERSION: ${{ fromJSON(steps.amazonlinux-version.outputs['matched-groups'])[0] }}
-          NITRO_VERSION_FILE: packages/nitro-cli/.current-version
-          NITRO_DOCKERFILE: packages/nitro-cli/Dockerfile
+      - name: Fetch latest upstream tags
+        id: watch
         shell: bash
         run: |
           set -euo pipefail
 
-          updated=false
-          deploy_nitro_cli=false
-          deploy_walrus_upload_relay=false
-          summary_file="$(mktemp)"
+          fetch_latest_tag() {
+            local repo="$1"
+            local filter="$2"
+            local max_pages="$3"
 
-          update_readme_version() {
-            local current_version="$1"
-            local latest_version="$2"
+            local page=1
+            while (( page <= max_pages )); do
+              response="$(
+                curl -fsSL "https://hub.docker.com/v2/repositories/${repo}/tags?page=${page}&page_size=100"
+              )"
 
-            sed -i "s/\`${current_version}\` 👁️/\`${latest_version}\` 👁️/" README.md
+              tag="$(
+                jq -r --arg filter "${filter}" '
+                  .results[]?.name
+                  | match($filter)?
+                  | select(. != null)
+                  | (.captures[0].string // .string)
+                ' <<< "${response}" | head -n1
+              )"
+
+              if [[ -n "${tag}" ]]; then
+                printf '%s\n' "${tag}"
+                return 0
+              fi
+
+              page=$((page + 1))
+            done
+
+            echo "No tag matched ${filter} in ${repo}" >&2
+            return 1
           }
 
-          walrus_current_version="$(tr -d '[:space:]' < "${WALRUS_VERSION_FILE}")"
-          if [[ -z "${walrus_current_version}" ]]; then
-            echo "No version found in ${WALRUS_VERSION_FILE}" >&2
-            exit 1
-          fi
+          packages="$(jq -cn '{}')"
 
-          if [[ "${walrus_current_version}" != "${WALRUS_LATEST_VERSION}" ]]; then
-            printf '%s\n' "${WALRUS_LATEST_VERSION}" > "${WALRUS_VERSION_FILE}"
-            update_readme_version "${walrus_current_version}" "${WALRUS_LATEST_VERSION}"
+          while read -r package; do
+            package_name="$(jq -r '.package_name' <<< "${package}")"
+            repo="$(jq -r '.repo' <<< "${package}")"
+            filter="$(jq -r '.filter' <<< "${package}")"
+            second_filter="$(jq -r '.second_filter' <<< "${package}")"
 
-            updated=true
-            deploy_walrus_upload_relay=true
-            printf '%s\n' "- walrus-upload-relay: ${walrus_current_version} -> ${WALRUS_LATEST_VERSION}" >> "${summary_file}"
-          else
-            echo "walrus-upload-relay is already at ${WALRUS_LATEST_VERSION}"
-          fi
+            latest_version="$(fetch_latest_tag "${repo}" "${filter}" 3)"
 
-          nitro_current_version="$(tr -d '[:space:]' < "${NITRO_VERSION_FILE}")"
-          if [[ -z "${nitro_current_version}" ]]; then
-            echo "No version found in ${NITRO_VERSION_FILE}" >&2
-            exit 1
-          fi
+            if [[ -n "${second_filter}" ]]; then
+              resolved_second_filter="${second_filter//\{\{version\}\}/${latest_version}}"
+              fetch_latest_tag "${repo}" "${resolved_second_filter}" 3 > /dev/null
+            fi
 
-          if [[ "${nitro_current_version}" != "${AMAZONLINUX_LATEST_VERSION}" ]]; then
-            printf '%s\n' "${AMAZONLINUX_LATEST_VERSION}" > "${NITRO_VERSION_FILE}"
-            update_readme_version "${nitro_current_version}" "${AMAZONLINUX_LATEST_VERSION}"
-            sed -i "s/^ARG VERSION=${nitro_current_version}$/ARG VERSION=${AMAZONLINUX_LATEST_VERSION}/" "${NITRO_DOCKERFILE}"
-
-            updated=true
-            deploy_nitro_cli=true
-            printf '%s\n' "- nitro-cli: ${nitro_current_version} -> ${AMAZONLINUX_LATEST_VERSION}" >> "${summary_file}"
-          else
-            echo "nitro-cli is already at ${AMAZONLINUX_LATEST_VERSION}"
-          fi
+            packages="$(
+              jq -c \
+                --arg package_name "${package_name}" \
+                --arg latest_version "${latest_version}" \
+                --argjson package "${package}" \
+                '. + {($package_name): ($package + {latest_version: $latest_version})}' \
+                <<< "${packages}"
+            )"
+          done < <(jq -c '.[]' <<< "${WATCH_MATRIX}")
 
           {
-            echo "updated=${updated}"
-            echo "deploy-nitro-cli=${deploy_nitro_cli}"
-            echo "deploy-walrus-upload-relay=${deploy_walrus_upload_relay}"
-            echo "summary<<EOF"
-            cat "${summary_file}"
+            echo "packages<<EOF"
+            jq -c . <<< "${packages}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Commit updates
-        if: steps.detect.outputs.updated == 'true'
+      - name: Patch and commit latest versions
+        id: sync
         env:
-          SUMMARY: ${{ steps.detect.outputs.summary }}
+          WATCHED_PACKAGES: ${{ steps.watch.outputs.packages }}
         shell: bash
         run: |
           set -euo pipefail
+
+          update_readme_version() {
+            local package_name="$1"
+            local current_version="$2"
+            local latest_version="$3"
+
+            sed -i "/\[\`cmdoss\/${package_name}\`\]/s/\`${current_version}\` 👁️/\`${latest_version}\` 👁️/" README.md
+
+            if ! grep -F "[\`cmdoss/${package_name}\`]" README.md | grep -Fq "\`${latest_version}\` 👁️"; then
+              echo "Failed to update ${package_name} version in README.md" >&2
+              exit 1
+            fi
+          }
+
+          updated=false
+          deploy_inputs="$(
+            jq -c '
+              map({(.publish_input): "false"})
+              | add
+              | . + {"deploy-auth-proxy": "false"}
+            ' <<< "${WATCH_MATRIX}"
+          )"
+          summary_file="$(mktemp)"
+
+          while read -r package; do
+            package_name="$(jq -r '.package_name' <<< "${package}")"
+            version_file="$(jq -r '.version_file' <<< "${package}")"
+            publish_input="$(jq -r '.publish_input' <<< "${package}")"
+            latest_version="$(jq -r '.latest_version' <<< "${package}")"
+
+            current_version="$(tr -d '[:space:]' < "${version_file}")"
+            if [[ -z "${current_version}" ]]; then
+              echo "No version found in ${version_file}" >&2
+              exit 1
+            fi
+
+            if [[ "${current_version}" == "${latest_version}" ]]; then
+              echo "${package_name} is already at ${latest_version}"
+              continue
+            fi
+
+            printf '%s\n' "${latest_version}" > "${version_file}"
+            update_readme_version "${package_name}" "${current_version}" "${latest_version}"
+
+            deploy_inputs="$(jq -c --arg publish_input "${publish_input}" '.[$publish_input] = "true"' <<< "${deploy_inputs}")"
+            updated=true
+            printf '%s\n' "- ${package_name}: ${current_version} -> ${latest_version}" >> "${summary_file}"
+          done < <(jq -c '.[]' <<< "${WATCHED_PACKAGES}")
+
+          if [[ "${updated}" != "true" ]]; then
+            {
+              echo "updated=false"
+              echo "deploy-inputs<<EOF"
+              jq -c . <<< "${deploy_inputs}"
+              echo "EOF"
+            } >> "${GITHUB_OUTPUT}"
+
+            echo "No watched upstream image updates found."
+            exit 0
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -- packages/nitro-cli/.current-version packages/nitro-cli/Dockerfile packages/walrus-upload-relay/.current-version README.md
-          git commit -m "chore: update watched upstream image versions" -m "${SUMMARY}"
+          mapfile -d '' changed_paths < <(git diff --name-only -z)
+          git add -- "${changed_paths[@]}"
+
+          summary="$(cat "${summary_file}")"
+          git commit -m "chore: update watched upstream image versions" -m "${summary}"
           git push origin HEAD:main
 
+          {
+            echo "updated=true"
+            echo "deploy-inputs<<EOF"
+            jq -c . <<< "${deploy_inputs}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Dispatch publish
-        if: steps.detect.outputs.updated == 'true'
+        if: steps.sync.outputs.updated == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          DEPLOY_NITRO_CLI: ${{ steps.detect.outputs['deploy-nitro-cli'] }}
-          DEPLOY_WALRUS_UPLOAD_RELAY: ${{ steps.detect.outputs['deploy-walrus-upload-relay'] }}
+          DEPLOY_INPUTS: ${{ steps.sync.outputs['deploy-inputs'] }}
         shell: bash
         run: |
           set -euo pipefail
 
           payload="$(
             jq -cn \
-              --arg deploy_nitro_cli "${DEPLOY_NITRO_CLI}" \
-              --arg deploy_walrus_upload_relay "${DEPLOY_WALRUS_UPLOAD_RELAY}" \
+              --argjson inputs "${DEPLOY_INPUTS}" \
               '{
-              ref: "main",
-              inputs: {
-                "deploy-nitro-cli": $deploy_nitro_cli,
-                "deploy-auth-proxy": "false",
-                "deploy-walrus-upload-relay": $deploy_walrus_upload_relay
-              }
-            }'
+                ref: "main",
+                inputs: $inputs
+              }'
           )"
 
           curl -fsSL \
@@ -160,7 +222,3 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yaml/dispatches" \
             -d "${payload}"
-
-      - name: Report no updates
-        if: steps.detect.outputs.updated != 'true'
-        run: echo "No watched upstream image updates found."
