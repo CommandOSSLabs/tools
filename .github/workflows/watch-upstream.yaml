@@ -24,7 +24,7 @@ jobs:
           ref: main
 
       - name: Fetch upstream version tag
-        id: upstream-version
+        id: walrus-version
         uses: nerd-coder/fetch-dockerhub-tags@v1
         with:
           repo: mysten/walrus-upload-relay
@@ -35,36 +35,84 @@ jobs:
         uses: nerd-coder/fetch-dockerhub-tags@v1
         with:
           repo: mysten/walrus-upload-relay
-          filter: ^main-arm64-v${{ fromJSON(steps.upstream-version.outputs['matched-groups'])[0] }}$
+          filter: ^main-arm64-v${{ fromJSON(steps.walrus-version.outputs['matched-groups'])[0] }}$
+          max_pages: 3
+
+      - name: Fetch Amazon Linux 2023 version tag
+        id: amazonlinux-version
+        uses: nerd-coder/fetch-dockerhub-tags@v1
+        with:
+          repo: library/amazonlinux
+          filter: ^(2023[.][0-9]+[.][0-9]+[.][0-9]+)$
           max_pages: 3
 
       - name: Detect upstream updates
         id: detect
         env:
-          LATEST_VERSION: ${{ fromJSON(steps.upstream-version.outputs['matched-groups'])[0] }}
-          VERSION_FILE: packages/walrus-upload-relay/.current-version
+          WALRUS_LATEST_VERSION: ${{ fromJSON(steps.walrus-version.outputs['matched-groups'])[0] }}
+          WALRUS_VERSION_FILE: packages/walrus-upload-relay/.current-version
+          AMAZONLINUX_LATEST_VERSION: ${{ fromJSON(steps.amazonlinux-version.outputs['matched-groups'])[0] }}
+          NITRO_VERSION_FILE: packages/nitro-cli/.current-version
+          NITRO_DOCKERFILE: packages/nitro-cli/Dockerfile
         shell: bash
         run: |
           set -euo pipefail
 
-          current_version="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+          updated=false
+          deploy_nitro_cli=false
+          deploy_walrus_upload_relay=false
+          summary_file="$(mktemp)"
 
-          if [[ -z "${current_version}" ]]; then
-            echo "No version found in ${VERSION_FILE}" >&2
+          update_readme_version() {
+            local current_version="$1"
+            local latest_version="$2"
+
+            sed -i "s/\`${current_version}\` 👁️/\`${latest_version}\` 👁️/" README.md
+          }
+
+          walrus_current_version="$(tr -d '[:space:]' < "${WALRUS_VERSION_FILE}")"
+          if [[ -z "${walrus_current_version}" ]]; then
+            echo "No version found in ${WALRUS_VERSION_FILE}" >&2
             exit 1
           fi
 
-          if [[ "${current_version}" == "${LATEST_VERSION}" ]]; then
-            echo "updated=false" >> "${GITHUB_OUTPUT}"
-            echo "walrus-upload-relay is already at ${LATEST_VERSION}"
-            exit 0
+          if [[ "${walrus_current_version}" != "${WALRUS_LATEST_VERSION}" ]]; then
+            printf '%s\n' "${WALRUS_LATEST_VERSION}" > "${WALRUS_VERSION_FILE}"
+            update_readme_version "${walrus_current_version}" "${WALRUS_LATEST_VERSION}"
+
+            updated=true
+            deploy_walrus_upload_relay=true
+            printf '%s\n' "- walrus-upload-relay: ${walrus_current_version} -> ${WALRUS_LATEST_VERSION}" >> "${summary_file}"
+          else
+            echo "walrus-upload-relay is already at ${WALRUS_LATEST_VERSION}"
           fi
 
-          printf '%s\n' "${LATEST_VERSION}" > "${VERSION_FILE}"
-          sed -i "s/\`${current_version}\` 👁️/\`${LATEST_VERSION}\` 👁️/" README.md
+          nitro_current_version="$(tr -d '[:space:]' < "${NITRO_VERSION_FILE}")"
+          if [[ -z "${nitro_current_version}" ]]; then
+            echo "No version found in ${NITRO_VERSION_FILE}" >&2
+            exit 1
+          fi
 
-          echo "updated=true" >> "${GITHUB_OUTPUT}"
-          echo "summary=- walrus-upload-relay: ${current_version} -> ${LATEST_VERSION}" >> "${GITHUB_OUTPUT}"
+          if [[ "${nitro_current_version}" != "${AMAZONLINUX_LATEST_VERSION}" ]]; then
+            printf '%s\n' "${AMAZONLINUX_LATEST_VERSION}" > "${NITRO_VERSION_FILE}"
+            update_readme_version "${nitro_current_version}" "${AMAZONLINUX_LATEST_VERSION}"
+            sed -i "s/^ARG VERSION=${nitro_current_version}$/ARG VERSION=${AMAZONLINUX_LATEST_VERSION}/" "${NITRO_DOCKERFILE}"
+
+            updated=true
+            deploy_nitro_cli=true
+            printf '%s\n' "- nitro-cli: ${nitro_current_version} -> ${AMAZONLINUX_LATEST_VERSION}" >> "${summary_file}"
+          else
+            echo "nitro-cli is already at ${AMAZONLINUX_LATEST_VERSION}"
+          fi
+
+          {
+            echo "updated=${updated}"
+            echo "deploy-nitro-cli=${deploy_nitro_cli}"
+            echo "deploy-walrus-upload-relay=${deploy_walrus_upload_relay}"
+            echo "summary<<EOF"
+            cat "${summary_file}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Commit updates
         if: steps.detect.outputs.updated == 'true'
@@ -77,7 +125,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -- packages/walrus-upload-relay/.current-version README.md
+          git add -- packages/nitro-cli/.current-version packages/nitro-cli/Dockerfile packages/walrus-upload-relay/.current-version README.md
           git commit -m "chore: update watched upstream image versions" -m "${SUMMARY}"
           git push origin HEAD:main
 
@@ -85,17 +133,22 @@ jobs:
         if: steps.detect.outputs.updated == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          DEPLOY_NITRO_CLI: ${{ steps.detect.outputs['deploy-nitro-cli'] }}
+          DEPLOY_WALRUS_UPLOAD_RELAY: ${{ steps.detect.outputs['deploy-walrus-upload-relay'] }}
         shell: bash
         run: |
           set -euo pipefail
 
           payload="$(
-            jq -cn '{
+            jq -cn \
+              --arg deploy_nitro_cli "${DEPLOY_NITRO_CLI}" \
+              --arg deploy_walrus_upload_relay "${DEPLOY_WALRUS_UPLOAD_RELAY}" \
+              '{
               ref: "main",
               inputs: {
-                "deploy-nitro-cli": "false",
+                "deploy-nitro-cli": $deploy_nitro_cli,
                 "deploy-auth-proxy": "false",
-                "deploy-walrus-upload-relay": "true"
+                "deploy-walrus-upload-relay": $deploy_walrus_upload_relay
               }
             }'
           )"
