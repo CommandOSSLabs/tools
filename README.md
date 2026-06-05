@@ -7,7 +7,7 @@ Collection of Docker images and tools for CommandOSS projects.
 | **Tool**                       | **Version** | **Description**                                   |
 | ------------------------------ | ----------- | ------------------------------------------------- |
 | [`cmdoss/auth-proxy`]          | `1.0.0`     | OpenResty + Lua JWT authentication reverse proxy. |
-| [`cmdoss/nitro-cli`]           | `2023.11.20260514.0` 👁️ | Containerized AWS Nitro Enclaves CLI.             |
+| [`cmdoss/nitro-cli`]           | `2023.11.20260526.0` 👁️ | Containerized AWS Nitro Enclaves CLI.             |
 | [`cmdoss/walrus-upload-relay`] | `1.50.0` 👁️  | Walrus Upload Relay with extra features.          |
 
 > [!NOTE]
