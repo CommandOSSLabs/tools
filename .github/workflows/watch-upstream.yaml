@@ -93,7 +93,10 @@ jobs:
 
             if [[ -n "${second_filter}" ]]; then
               resolved_second_filter="${second_filter//\{\{version\}\}/${latest_version}}"
-              fetch_latest_tag "${repo}" "${resolved_second_filter}" 3 > /dev/null
+              if ! fetch_latest_tag "${repo}" "${resolved_second_filter}" 3 > /dev/null; then
+                echo "Skipping ${package_name}: secondary tag check failed for ${resolved_second_filter}"
+                continue
+              fi
             fi
 
             packages="$(
