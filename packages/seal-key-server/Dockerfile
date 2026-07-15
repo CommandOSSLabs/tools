@@ -44,7 +44,7 @@ LABEL org.opencontainers.image.title="CommandOSS Seal Key Server" \
   org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+  && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=downloader /key-server /opt/key-server/bin/key-server
@@ -53,5 +53,10 @@ COPY --from=downloader /key-server /opt/key-server/bin/key-server
 EXPOSE 2024
 # Prometheus metrics (default metrics_host_port 9184)
 EXPOSE 9184
+
+# Readiness: mysten-service registers GET /health once Axum is listening
+# (after config + master key load).
+HEALTHCHECK --interval=5s --timeout=5s --start-period=30s --retries=12 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-2024}/health" || exit 1
 
 ENTRYPOINT ["/opt/key-server/bin/key-server"]
