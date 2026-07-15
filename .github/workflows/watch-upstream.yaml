@@ -1,4 +1,4 @@
-name: Watch Upstream Docker Images
+name: Watch Upstream Versions
 
 on:
   schedule:
@@ -18,10 +18,15 @@ jobs:
     name: Sync Watched Upstream Versions
     runs-on: ubuntu-latest
     env:
+      # source: "dockerhub" (default) | "github"
+      # dockerhub: repo is Docker Hub path (e.g. library/amazonlinux)
+      # github: repo is owner/name (e.g. MystenLabs/seal); filter matches release tag_name
+      # required_assets (github only): optional list of asset names that must exist on the release
       WATCH_MATRIX: |
         [
           {
             "package_name": "nitro-cli",
+            "source": "dockerhub",
             "repo": "library/amazonlinux",
             "filter": "^(2023[.][0-9]+[.][0-9]+[.][0-9]+)$",
             "second_filter": "",
@@ -30,11 +35,24 @@ jobs:
           },
           {
             "package_name": "walrus-upload-relay",
+            "source": "dockerhub",
             "repo": "mysten/walrus-upload-relay",
             "filter": "^main-v([0-9]+[.][0-9]+[.][0-9]+)$",
             "second_filter": "^main-arm64-v{{version}}$",
             "version_file": "packages/walrus-upload-relay/.current-version",
             "publish_input": "deploy-walrus-upload-relay"
+          },
+          {
+            "package_name": "seal-key-server",
+            "source": "github",
+            "repo": "MystenLabs/seal",
+            "filter": "^seal-v([0-9]+[.][0-9]+[.][0-9]+)$",
+            "required_assets": [
+              "key-server-linux-x86_64",
+              "key-server-linux-aarch64"
+            ],
+            "version_file": "packages/seal-key-server/.current-version",
+            "publish_input": "deploy-seal-key-server"
           }
         ]
     steps:
@@ -43,13 +61,15 @@ jobs:
         with:
           ref: main
 
-      - name: Fetch latest upstream tags
+      - name: Fetch latest upstream versions
         id: watch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          fetch_latest_tag() {
+          fetch_latest_dockerhub_tag() {
             local repo="$1"
             local filter="$2"
             local max_pages="$3"
@@ -77,7 +97,79 @@ jobs:
               page=$((page + 1))
             done
 
-            echo "No tag matched ${filter} in ${repo}" >&2
+            echo "No tag matched ${filter} in Docker Hub repo ${repo}" >&2
+            return 1
+          }
+
+          # Finds the newest non-draft, non-prerelease GitHub release whose tag_name
+          # matches filter. Prints the first capture group when present, else the full match.
+          # Optional required_assets_json is a JSON array of asset names that must exist.
+          fetch_latest_github_release() {
+            local repo="$1"
+            local filter="$2"
+            local max_pages="$3"
+            local required_assets_json="${4:-[]}"
+
+            local auth_args=()
+            if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+              auth_args=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+            fi
+
+            local page=1
+            while (( page <= max_pages )); do
+              response="$(
+                curl -fsSL \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "${auth_args[@]}" \
+                  "https://api.github.com/repos/${repo}/releases?per_page=30&page=${page}"
+              )"
+
+              # Empty page means we've exhausted releases.
+              if [[ "$(jq 'length' <<< "${response}")" -eq 0 ]]; then
+                break
+              fi
+
+              # Walk releases in API order (newest first). Skip drafts/prereleases.
+              while read -r release; do
+                tag_name="$(jq -r '.tag_name // empty' <<< "${release}")"
+                [[ -z "${tag_name}" ]] && continue
+
+                version="$(
+                  jq -rn --arg tag "${tag_name}" --arg filter "${filter}" '
+                    ($tag | match($filter)?) as $m
+                    | if $m == null then empty
+                      else ($m.captures[0].string // $m.string)
+                      end
+                  '
+                )"
+                [[ -z "${version}" ]] && continue
+
+                # Ensure required release assets are present when configured.
+                missing="$(
+                  jq -r --argjson required "${required_assets_json}" '
+                    ($required // []) as $need
+                    | .assets // []
+                    | map(.name)
+                    | . as $have
+                    | $need
+                    | map(select(. as $n | ($have | index($n) | not)))
+                    | .[]
+                  ' <<< "${release}"
+                )"
+                if [[ -n "${missing}" ]]; then
+                  echo "Skipping ${repo}@${tag_name}: missing assets: ${missing//$'\n'/, }" >&2
+                  continue
+                fi
+
+                printf '%s\n' "${version}"
+                return 0
+              done < <(jq -c '.[] | select(.draft == false and .prerelease == false)' <<< "${response}")
+
+              page=$((page + 1))
+            done
+
+            echo "No release matched ${filter} in GitHub repo ${repo}" >&2
             return 1
           }
 
@@ -85,19 +177,32 @@ jobs:
 
           while read -r package; do
             package_name="$(jq -r '.package_name' <<< "${package}")"
+            source="$(jq -r '.source // "dockerhub"' <<< "${package}")"
             repo="$(jq -r '.repo' <<< "${package}")"
             filter="$(jq -r '.filter' <<< "${package}")"
-            second_filter="$(jq -r '.second_filter' <<< "${package}")"
+            second_filter="$(jq -r '.second_filter // empty' <<< "${package}")"
+            required_assets="$(jq -c '.required_assets // []' <<< "${package}")"
 
-            latest_version="$(fetch_latest_tag "${repo}" "${filter}" 3)"
+            case "${source}" in
+              dockerhub)
+                latest_version="$(fetch_latest_dockerhub_tag "${repo}" "${filter}" 3)"
 
-            if [[ -n "${second_filter}" ]]; then
-              resolved_second_filter="${second_filter//\{\{version\}\}/${latest_version}}"
-              if ! fetch_latest_tag "${repo}" "${resolved_second_filter}" 3 > /dev/null; then
-                echo "Skipping ${package_name}: secondary tag check failed for ${resolved_second_filter}"
-                continue
-              fi
-            fi
+                if [[ -n "${second_filter}" ]]; then
+                  resolved_second_filter="${second_filter//\{\{version\}\}/${latest_version}}"
+                  if ! fetch_latest_dockerhub_tag "${repo}" "${resolved_second_filter}" 3 > /dev/null; then
+                    echo "Skipping ${package_name}: secondary tag check failed for ${resolved_second_filter}"
+                    continue
+                  fi
+                fi
+                ;;
+              github)
+                latest_version="$(fetch_latest_github_release "${repo}" "${filter}" 5 "${required_assets}")"
+                ;;
+              *)
+                echo "Unknown source '${source}' for package ${package_name}" >&2
+                exit 1
+                ;;
+            esac
 
             packages="$(
               jq -c \
@@ -179,7 +284,7 @@ jobs:
               echo "EOF"
             } >> "${GITHUB_OUTPUT}"
 
-            echo "No watched upstream image updates found."
+            echo "No watched upstream updates found."
             exit 0
           fi
 
@@ -190,7 +295,7 @@ jobs:
           git add -- "${changed_paths[@]}"
 
           summary="$(cat "${summary_file}")"
-          git commit -m "chore: update watched upstream image versions" -m "${summary}"
+          git commit -m "chore: update watched upstream versions" -m "${summary}"
           git push origin HEAD:main
 
           {

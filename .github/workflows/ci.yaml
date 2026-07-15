@@ -22,6 +22,7 @@ jobs:
       nitro-cli: ${{ steps.filter.outputs.nitro-cli }}
       auth-proxy: ${{ steps.filter.outputs.auth-proxy }}
       walrus-upload-relay: ${{ steps.filter.outputs.walrus-upload-relay }}
+      seal-key-server: ${{ steps.filter.outputs.seal-key-server }}
       global: ${{ steps.filter.outputs.global }}
     steps:
       - name: 🛎 Checkout
@@ -38,6 +39,8 @@ jobs:
               - 'packages/auth-proxy/**'
             walrus-upload-relay:
               - 'packages/walrus-upload-relay/**'
+            seal-key-server:
+              - 'packages/seal-key-server/**'
             global:
               - 'scripts/sync-dockerhub-readme.ts'
               - '.github/workflows/ci.yaml'
@@ -51,6 +54,7 @@ jobs:
       deploy-nitro-cli: ${{ needs.detect-changes.outputs.nitro-cli == 'true' || needs.detect-changes.outputs.global == 'true' }}
       deploy-auth-proxy: ${{ needs.detect-changes.outputs.auth-proxy == 'true' || needs.detect-changes.outputs.global == 'true' }}
       deploy-walrus-upload-relay: ${{ needs.detect-changes.outputs.walrus-upload-relay == 'true' || needs.detect-changes.outputs.global == 'true' }}
+      deploy-seal-key-server: ${{ needs.detect-changes.outputs.seal-key-server == 'true' || needs.detect-changes.outputs.global == 'true' }}
       # Add more packages below as needed
       # deploy-foo: ${{ needs.detect-changes.outputs.foo == 'true' || needs.detect-changes.outputs.global == 'true' }}
     secrets: inherit

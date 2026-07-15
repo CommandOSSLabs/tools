@@ -15,6 +15,10 @@ on:
         required: false
         type: boolean
         default: false
+      deploy-seal-key-server:
+        required: false
+        type: boolean
+        default: false
       # Add more packages below as needed
       # deploy-foo:
       #   required: false
@@ -34,6 +38,11 @@ on:
         default: true
       deploy-walrus-upload-relay:
         description: "Deploy walrus-upload-relay package"
+        required: false
+        type: boolean
+        default: true
+      deploy-seal-key-server:
+        description: "Deploy seal-key-server package"
         required: false
         type: boolean
         default: true
@@ -63,6 +72,7 @@ jobs:
           DEPLOY_NITRO_CLI: ${{ inputs.deploy-nitro-cli }}
           DEPLOY_AUTH_PROXY: ${{ inputs.deploy-auth-proxy }}
           DEPLOY_WALRUS_UPLOAD_RELAY: ${{ inputs.deploy-walrus-upload-relay }}
+          DEPLOY_SEAL_KEY_SERVER: ${{ inputs.deploy-seal-key-server }}
           # Add more package env vars below as needed
           # DEPLOY_FOO: ${{ inputs.deploy-foo }}
         run: |
@@ -82,6 +92,9 @@ jobs:
                 ;;
               walrus-upload-relay)
                 [[ "${DEPLOY_WALRUS_UPLOAD_RELAY}" == "true" ]] && return 0 || return 1
+                ;;
+              seal-key-server)
+                [[ "${DEPLOY_SEAL_KEY_SERVER}" == "true" ]] && return 0 || return 1
                 ;;
               # Add more packages below as needed
               # foo)
